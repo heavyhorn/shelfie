@@ -93,13 +93,11 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   Future<void> _openDetail(Product product) async {
-    final changed = await Navigator.of(context).push<bool>(
-      MaterialPageRoute(builder: (_) => ProductDetailScreen(product: product)),
-    );
-    if (changed == true) {
-      await _load();
-    }
-  }
+  await Navigator.of(context).push<bool>(
+    MaterialPageRoute(builder: (_) => ProductDetailScreen(product: product)),
+  );
+  await _load();
+}
 
   Future<void> _openUseScreen() async {
     if (_products.isEmpty) {

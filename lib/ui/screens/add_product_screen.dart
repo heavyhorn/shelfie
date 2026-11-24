@@ -3,35 +3,67 @@ import '../../data/models/product.dart';
 import '../../data/product_suggestions.dart';
 
 class AddProductScreen extends StatefulWidget {
-  const AddProductScreen({super.key});
+  /// Если передан — экран работает в режиме редактирования.
+  /// При сохранении возвращает обновлённый [Product] с тем же id.
+  final Product? initialProduct;
+
+  const AddProductScreen({super.key, this.initialProduct});
 
   @override
   State<AddProductScreen> createState() => _AddProductScreenState();
 }
 
 class _AddProductScreenState extends State<AddProductScreen> {
-  int _step = 0; // 0 — категория, 1 — детали
+  int _step = 0;
 
   ProductCategory? _category;
 
-  final _nameController = TextEditingController();
-  final _qtyController = TextEditingController(text: '1');
-  QuantityUnit _unit = QuantityUnit.pieces;
+  late final TextEditingController _nameController;
+  late final TextEditingController _qtyController;
+  late QuantityUnit _unit;
   DateTime? _expiryDate;
-  DateTime _addedAt = DateTime.now();
-
-  /// Подсказка из справочника: если выбранное название принадлежит
-  /// другой категории, чем выбрана на шаге 0 — покажем мягкое предупреждение.
-  ProductSuggestion? _matchedSuggestion;
+  late DateTime _addedAt;
 
   final _nameFocusNode = FocusNode();
+
+  ProductSuggestion? _matchedSuggestion;
+
+  bool get _isEditing => widget.initialProduct != null;
+
+  @override
+  void initState() {
+    super.initState();
+    final initial = widget.initialProduct;
+
+    if (initial != null) {
+      // Режим редактирования: сразу на шаг деталей, всё предзаполнено.
+      _step = 1;
+      _category = initial.category;
+      _nameController = TextEditingController(text: initial.name);
+      _qtyController = TextEditingController(
+        text: _formatQty(initial.quantity),
+      );
+      _unit = initial.unit;
+      _expiryDate = initial.expiryDate;
+      _addedAt = initial.addedAt;
+    } else {
+      _nameController = TextEditingController();
+      _qtyController = TextEditingController(text: '1');
+      _unit = QuantityUnit.pieces;
+      _addedAt = DateTime.now();
+    }
+  }
 
   @override
   void dispose() {
     _nameController.dispose();
     _qtyController.dispose();
+    _nameFocusNode.dispose();
     super.dispose();
   }
+
+  String _formatQty(double v) =>
+      v == v.roundToDouble() ? v.toInt().toString() : v.toString();
 
   void _next() => setState(() => _step++);
 
@@ -39,7 +71,12 @@ class _AddProductScreenState extends State<AddProductScreen> {
     if (_step == 0) {
       Navigator.of(context).pop();
     } else {
-      setState(() => _step--);
+      // В режиме редактирования назад на шаг 0 нельзя — сохраняем категорию как есть.
+      if (_isEditing) {
+        Navigator.of(context).pop();
+      } else {
+        setState(() => _step--);
+      }
     }
   }
 
@@ -78,7 +115,6 @@ class _AddProductScreenState extends State<AddProductScreen> {
     if (picked != null) setState(() => _addedAt = picked);
   }
 
-  /// Поиск подсказки по точному совпадению названия (без учёта регистра).
   ProductSuggestion? _findSuggestionByName(String raw) {
     final needle = raw.trim().toLowerCase();
     if (needle.isEmpty) return null;
@@ -88,15 +124,9 @@ class _AddProductScreenState extends State<AddProductScreen> {
     return null;
   }
 
-  /// Вызывается при вводе в поле названия (включая ввод вручную, не только
-  /// выбор из выпадающего списка). Если название совпало со справочником —
-  /// подставляем единицу измерения и запоминаем подсказку.
   void _onNameChanged(String value) {
     final match = _findSuggestionByName(value);
     if (match != null) {
-      // Автоподстановка единицы измерения — только если пользователь
-      // ещё не менял её вручную (проверяем по совпадению с текущим значением
-      // дефолта — грубая, но безопасная эвристика).
       setState(() {
         _matchedSuggestion = match;
         _unit = match.defaultUnit;
@@ -109,8 +139,11 @@ class _AddProductScreenState extends State<AddProductScreen> {
   }
 
   void _submit() {
+    final baseId =
+        widget.initialProduct?.id ?? DateTime.now().millisecondsSinceEpoch.toString();
+
     final product = Product(
-      id: DateTime.now().millisecondsSinceEpoch.toString(),
+      id: baseId,
       name: _nameController.text.trim(),
       quantity: double.parse(_qtyController.text.replaceAll(',', '.')),
       unit: _unit,
@@ -123,9 +156,13 @@ class _AddProductScreenState extends State<AddProductScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final title = _isEditing
+        ? 'Редактирование'
+        : (_step == 0 ? 'Категория' : 'Детали');
+
     return Scaffold(
       appBar: AppBar(
-        title: Text(_step == 0 ? 'Категория' : 'Детали'),
+        title: Text(title),
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
           onPressed: _back,
@@ -133,12 +170,11 @@ class _AddProductScreenState extends State<AddProductScreen> {
       ),
       body: Column(
         children: [
-          _StepIndicator(step: _step),
+          if (!_isEditing) _StepIndicator(step: _step),
           Expanded(
             child: AnimatedSwitcher(
               duration: const Duration(milliseconds: 200),
               child: _buildStep(),
-              
             ),
           ),
           SafeArea(
@@ -170,21 +206,19 @@ class _AddProductScreenState extends State<AddProductScreen> {
   }
 
   Widget _buildStep() {
-    
     switch (_step) {
       case 0:
         return _CategoryStep(
           key: const ValueKey(0),
           selected: _category,
           onSelect: (c) => setState(() => _category = c),
-          
         );
       case 1:
         return _DetailsStep(
-          nameFocusNode: _nameFocusNode,
           key: const ValueKey(1),
           category: _category!,
           nameController: _nameController,
+          nameFocusNode: _nameFocusNode,
           qtyController: _qtyController,
           unit: _unit,
           onUnitChanged: (u) => setState(() => _unit = u),
@@ -246,6 +280,7 @@ class _CategoryStep extends StatelessWidget {
 class _DetailsStep extends StatelessWidget {
   final ProductCategory category;
   final TextEditingController nameController;
+  final FocusNode nameFocusNode;
   final TextEditingController qtyController;
   final QuantityUnit unit;
   final ValueChanged<QuantityUnit> onUnitChanged;
@@ -258,12 +293,12 @@ class _DetailsStep extends StatelessWidget {
   final ValueChanged<String> onNameChanged;
   final VoidCallback onQtyChanged;
   final ProductSuggestion? matchedSuggestion;
-  final FocusNode nameFocusNode;
 
   const _DetailsStep({
     super.key,
     required this.category,
     required this.nameController,
+    required this.nameFocusNode,
     required this.qtyController,
     required this.unit,
     required this.onUnitChanged,
@@ -276,7 +311,6 @@ class _DetailsStep extends StatelessWidget {
     required this.onNameChanged,
     required this.onQtyChanged,
     required this.matchedSuggestion,
-    required this.nameFocusNode,
   });
 
   @override
@@ -289,8 +323,6 @@ class _DetailsStep extends StatelessWidget {
       children: [
         Text(category.label),
         const SizedBox(height: 16),
-
-        // === Поле названия с автодополнением из справочника ===
         RawAutocomplete<ProductSuggestion>(
           textEditingController: nameController,
           focusNode: nameFocusNode,
@@ -351,8 +383,6 @@ class _DetailsStep extends StatelessWidget {
             );
           },
         ),
-
-        // === Мягкое предупреждение о несовпадении категории ===
         if (showCategoryMismatch)
           Padding(
             padding: const EdgeInsets.only(top: 8),
@@ -371,7 +401,6 @@ class _DetailsStep extends StatelessWidget {
               ],
             ),
           ),
-
         const SizedBox(height: 16),
         Row(
           children: [
