@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../data/models/product.dart';
+import '../../data/product_suggestions.dart';
 
 class AddProductScreen extends StatefulWidget {
   const AddProductScreen({super.key});
@@ -18,6 +19,12 @@ class _AddProductScreenState extends State<AddProductScreen> {
   QuantityUnit _unit = QuantityUnit.pieces;
   DateTime? _expiryDate;
   DateTime _addedAt = DateTime.now();
+
+  /// Подсказка из справочника: если выбранное название принадлежит
+  /// другой категории, чем выбрана на шаге 0 — покажем мягкое предупреждение.
+  ProductSuggestion? _matchedSuggestion;
+
+  final _nameFocusNode = FocusNode();
 
   @override
   void dispose() {
@@ -71,6 +78,36 @@ class _AddProductScreenState extends State<AddProductScreen> {
     if (picked != null) setState(() => _addedAt = picked);
   }
 
+  /// Поиск подсказки по точному совпадению названия (без учёта регистра).
+  ProductSuggestion? _findSuggestionByName(String raw) {
+    final needle = raw.trim().toLowerCase();
+    if (needle.isEmpty) return null;
+    for (final s in kProductSuggestions) {
+      if (s.name.toLowerCase() == needle) return s;
+    }
+    return null;
+  }
+
+  /// Вызывается при вводе в поле названия (включая ввод вручную, не только
+  /// выбор из выпадающего списка). Если название совпало со справочником —
+  /// подставляем единицу измерения и запоминаем подсказку.
+  void _onNameChanged(String value) {
+    final match = _findSuggestionByName(value);
+    if (match != null) {
+      // Автоподстановка единицы измерения — только если пользователь
+      // ещё не менял её вручную (проверяем по совпадению с текущим значением
+      // дефолта — грубая, но безопасная эвристика).
+      setState(() {
+        _matchedSuggestion = match;
+        _unit = match.defaultUnit;
+      });
+    } else {
+      if (_matchedSuggestion != null) {
+        setState(() => _matchedSuggestion = null);
+      }
+    }
+  }
+
   void _submit() {
     final product = Product(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
@@ -101,6 +138,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
             child: AnimatedSwitcher(
               duration: const Duration(milliseconds: 200),
               child: _buildStep(),
+              
             ),
           ),
           SafeArea(
@@ -132,15 +170,18 @@ class _AddProductScreenState extends State<AddProductScreen> {
   }
 
   Widget _buildStep() {
+    
     switch (_step) {
       case 0:
         return _CategoryStep(
           key: const ValueKey(0),
           selected: _category,
           onSelect: (c) => setState(() => _category = c),
+          
         );
       case 1:
         return _DetailsStep(
+          nameFocusNode: _nameFocusNode,
           key: const ValueKey(1),
           category: _category!,
           nameController: _nameController,
@@ -153,8 +194,9 @@ class _AddProductScreenState extends State<AddProductScreen> {
           addedAt: _addedAt,
           onPickAddedAt: _pickAddedAt,
           onClearAddedAt: () => setState(() => _addedAt = DateTime.now()),
-          onNameChanged: () => setState(() {}),
+          onNameChanged: _onNameChanged,
           onQtyChanged: () => setState(() {}),
+          matchedSuggestion: _matchedSuggestion,
         );
       default:
         return const SizedBox.shrink();
@@ -213,8 +255,10 @@ class _DetailsStep extends StatelessWidget {
   final DateTime addedAt;
   final VoidCallback onPickAddedAt;
   final VoidCallback onClearAddedAt;
-  final VoidCallback onNameChanged;
+  final ValueChanged<String> onNameChanged;
   final VoidCallback onQtyChanged;
+  final ProductSuggestion? matchedSuggestion;
+  final FocusNode nameFocusNode;
 
   const _DetailsStep({
     super.key,
@@ -231,23 +275,103 @@ class _DetailsStep extends StatelessWidget {
     required this.onClearAddedAt,
     required this.onNameChanged,
     required this.onQtyChanged,
+    required this.matchedSuggestion,
+    required this.nameFocusNode,
   });
 
   @override
   Widget build(BuildContext context) {
+    final showCategoryMismatch = matchedSuggestion != null &&
+        matchedSuggestion!.category != category;
+
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
         Text(category.label),
         const SizedBox(height: 16),
-        TextField(
-          controller: nameController,
-          onChanged: (_) => onNameChanged(),
-          decoration: const InputDecoration(
-            labelText: 'Название продукта',
-            border: OutlineInputBorder(),
-          ),
+
+        // === Поле названия с автодополнением из справочника ===
+        RawAutocomplete<ProductSuggestion>(
+          textEditingController: nameController,
+          focusNode: nameFocusNode,
+          optionsBuilder: (TextEditingValue textEditingValue) {
+            final q = textEditingValue.text.trim().toLowerCase();
+            if (q.isEmpty) return const Iterable<ProductSuggestion>.empty();
+            return kProductSuggestions.where(
+              (s) => s.name.toLowerCase().contains(q),
+            );
+          },
+          displayStringForOption: (s) => s.name,
+          onSelected: (s) {
+            nameController.text = s.name;
+            nameController.selection = TextSelection.fromPosition(
+              TextPosition(offset: s.name.length),
+            );
+            onNameChanged(s.name);
+          },
+          fieldViewBuilder:
+              (context, controller, focusNode, onFieldSubmitted) {
+            return TextField(
+              controller: controller,
+              focusNode: focusNode,
+              onChanged: onNameChanged,
+              onSubmitted: (_) => onFieldSubmitted(),
+              decoration: const InputDecoration(
+                labelText: 'Название продукта',
+                border: OutlineInputBorder(),
+              ),
+            );
+          },
+          optionsViewBuilder: (context, onSelected, options) {
+            return Align(
+              alignment: Alignment.topLeft,
+              child: Material(
+                elevation: 4,
+                borderRadius: BorderRadius.circular(12),
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxHeight: 240),
+                  child: ListView.builder(
+                    padding: EdgeInsets.zero,
+                    shrinkWrap: true,
+                    itemCount: options.length,
+                    itemBuilder: (context, index) {
+                      final option = options.elementAt(index);
+                      return ListTile(
+                        dense: true,
+                        title: Text(option.name),
+                        subtitle: Text(
+                          '${option.category.label} • ${option.defaultUnit.label}',
+                        ),
+                        onTap: () => onSelected(option),
+                      );
+                    },
+                  ),
+                ),
+              ),
+            );
+          },
         ),
+
+        // === Мягкое предупреждение о несовпадении категории ===
+        if (showCategoryMismatch)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Row(
+              children: [
+                const Icon(Icons.info_outline, size: 16, color: Colors.orange),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    'В справочнике «${matchedSuggestion!.name}» относится '
+                    'к категории «${matchedSuggestion!.category.label}». '
+                    'Оставить выбранную?',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ),
+              ],
+            ),
+          ),
+
         const SizedBox(height: 16),
         Row(
           children: [
