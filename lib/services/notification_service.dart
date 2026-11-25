@@ -167,4 +167,26 @@ class NotificationService {
 
   String _fmtDate(DateTime d) =>
       '${d.day.toString().padLeft(2, '0')}.${d.month.toString().padLeft(2, '0')}.${d.year}';
+
+      /// Отменяет все запланированные уведомления приложения.
+  Future<void> cancelAll() async {
+    try {
+      await _plugin.cancelAll();
+      debugPrint('NotificationService: cancelAll done');
+    } catch (e, st) {
+      debugPrint('NotificationService: cancelAll FAILED: $e\n$st');
+    }
+  }
+
+  /// Перепланирует уведомления для всех переданных продуктов.
+  /// Вызывать при старте приложения — на случай, если ОС сбросила будильники
+  /// (перезагрузка, обновление, очистка данных, переустановка).
+  Future<void> rescheduleAll(List<Product> products) async {
+    await cancelAll();
+    for (final p in products) {
+      await scheduleExpiryReminder(p);
+      await scheduleStaleReminder(p);
+    }
+    debugPrint('NotificationService: rescheduled ${products.length} products');
+  }
 }
