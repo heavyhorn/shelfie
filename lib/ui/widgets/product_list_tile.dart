@@ -1,15 +1,20 @@
 import 'package:flutter/material.dart';
 import '../../data/models/product.dart';
 import '../theme/app_theme.dart';
+import 'write_off_dialog.dart';
 
-class ProductListTile extends StatelessWidget {
+class ProductListTile extends StatelessWidget { // Возвращаем StatelessWidget!
   final Product product;
   final VoidCallback onTap;
+  final Future<void> Function(double amount)? onWriteOff;
+  final Future<void> Function()? onDelete;
 
   const ProductListTile({
     super.key,
     required this.product,
     required this.onTap,
+    this.onWriteOff,
+    this.onDelete,
   });
 
   @override
@@ -17,7 +22,7 @@ class ProductListTile extends StatelessWidget {
     final qtyColor = QuantityColor.of(product);
     final expiryInfo = _expiryInfo(context);
 
-    return Card(
+    final tile = Card(
       child: InkWell(
         onTap: onTap,
         borderRadius: BorderRadius.circular(12),
@@ -81,9 +86,113 @@ class ProductListTile extends StatelessWidget {
         ),
       ),
     );
+
+    if (onWriteOff == null && onDelete == null) {
+      return tile;
+    }
+
+    return Dismissible(
+      key: ValueKey('product-dismissible-${product.id}'),
+      background: _buildBackground(
+        context,
+        alignment: Alignment.centerLeft,
+        color: Colors.orange.shade600,
+        icon: Icons.remove_circle_outline,
+        label: 'Списать',
+      ),
+      secondaryBackground: _buildBackground(
+        context,
+        alignment: Alignment.centerRight,
+        color: Theme.of(context).colorScheme.error,
+        icon: Icons.delete_outline,
+        label: 'Удалить',
+      ),
+      direction: (onWriteOff != null && onDelete != null)
+          ? DismissDirection.horizontal
+          : (onWriteOff != null
+              ? DismissDirection.startToEnd
+              : DismissDirection.endToStart),
+      
+      // ХИТРОСТЬ: Мы перехватываем свайп, делаем всё сами и ВСЕГДА возвращаем false.
+      // Это заставляет Dismissible вернуть карточку на место, а мы удаляем её
+      // из списка через setState. Никаких ошибок дерева.
+      confirmDismiss: (direction) async {
+        if (direction == DismissDirection.startToEnd) {
+          if (onWriteOff == null) return false;
+          final amount = await showWriteOffDialog(context, product);
+          if (amount != null) {
+            onWriteOff!(amount); // Вызываем обновление в родителе
+          }
+        } else {
+          if (onDelete == null) return false;
+          final confirmed = await _confirmDelete(context, product);
+          if (confirmed) {
+            onDelete!(); // Вызываем обновление в родителе
+          }
+        }
+        return false; // ВСЕГДА false! Dismissible не будет удалять сам себя.
+      },
+      child: tile,
+    );
   }
 
-  /// Возвращает текст и цвет бейджа о сроке годности, либо null, если срок не указан.
+  Widget _buildBackground(
+    BuildContext context, {
+    required Alignment alignment,
+    required Color color,
+    required IconData icon,
+    required String label,
+  }) {
+    return Container(
+      alignment: alignment,
+      padding: const EdgeInsets.symmetric(horizontal: 24),
+      decoration: BoxDecoration(
+        color: color,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, color: Colors.white),
+          const SizedBox(width: 8),
+          Text(
+            label,
+            style: const TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<bool> _confirmDelete(BuildContext context, Product product) async {
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Удалить продукт?'),
+        content: Text(
+          '«${product.name}» будет удалён без возможности восстановления.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Отмена'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(context).colorScheme.error,
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Удалить'),
+          ),
+        ],
+      ),
+    );
+    return result == true;
+  }
+
   _ExpiryInfo? _expiryInfo(BuildContext context) {
     final expiry = product.expiryDate;
     if (expiry == null) return null;
